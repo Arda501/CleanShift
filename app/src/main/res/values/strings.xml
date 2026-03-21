@@ -1,0 +1,83 @@
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation,TypographyDashes,Typos">
+    <string name="app_name">CleanShift</string>
+
+    <string name="nav_dashboard">Dashboard</string>
+    <string name="nav_log">Log</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="hours_format">%1$s hrs</string>
+    <string name="shifts_format">%1$d shifts</string>
+    <string name="upcoming_this_month">UPCOMING:</string>
+    <string name="planned_shifts">Planned: %1$d shifts</string>
+    <string name="shifts_title">Shifts</string>
+    <string name="tap_to_return">Tap to return to Today</string>
+
+    <string name="shift_history">Shift History</string>
+    <string name="no_shifts_logged">No shifts logged yet.</string>
+    <string name="total_earned">Total Earned: %1$s</string>
+
+    <string name="appearance">Appearance</string>
+    <string name="theme">Theme</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="amoled_black">AMOLED True Black</string>
+    <string name="amoled_desc">Saves battery on OLED screens</string>
+    <string name="material_you">Material You (Dynamic Colors)</string>
+    <string name="custom_accent">Custom Accent Hue</string>
+    <string name="automation">Automation</string>
+    <string name="auto_complete">Auto-Complete Shifts</string>
+    <string name="auto_complete_desc">Automatically log shifts as complete when their time passes.</string>
+    <string name="localization">Localization</string>
+    <string name="currency_override">Currency Selection</string>
+    <string name="data_management">Data Management</string>
+    <string name="export_csv">Spreadsheet Export</string>
+    <string name="export_csv_desc">Export your history as a CSV file to view as Spreadsheet.</string>
+    <string name="btn_export">Export to CSV</string>
+    <string name="backup_restore">App Backup &amp; Restore</string>
+    <string name="backup_desc">Create a full JSON clone of your shifts, settings, and rules to transfer to a new phone.</string>
+    <string name="btn_backup">Create Backup</string>
+    <string name="btn_restore">Restore Data</string>
+    <string name="dev_debug">Developer / Debug</string>
+    <string name="debug_desc">Manually fire the background notification event to test how it looks.</string>
+    <string name="btn_trigger_test">Trigger Test Notification</string>
+
+    <string name="add_shift">Add Shift</string>
+    <string name="edit_shift">Edit Shift</string>
+    <string name="shift_name">Shift Name</string>
+    <string name="shift_color_marker">Shift Color Marker</string>
+    <string name="start_date">Start Date</string>
+    <string name="start_time">Start</string>
+    <string name="end_time">End</string>
+    <string name="duration_format">Duration: %1$s hours</string>
+    <string name="repetition">Repetition</string>
+    <string name="repeat_every_x">Repeat every X days</string>
+    <string name="hourly_wage">Hourly Wage</string>
+    <string name="btn_save">Save</string>
+    <string name="btn_delete">Delete</string>
+    <string name="btn_cancel">Cancel</string>
+
+    <string name="rep_none">One-time</string>
+    <string name="rep_weekly">Weekly</string>
+    <string name="rep_biweekly">Bi-weekly</string>
+    <string name="rep_monthly">Monthly</string>
+    <string name="rep_custom">Custom (Days)</string>
+
+    <string name="toast_export_success">Export Successful!</string>
+    <string name="toast_export_fail">Export Failed: %1$s</string>
+    <string name="toast_backup_success">App Backup Created Successfully!</string>
+    <string name="toast_backup_fail">Backup Failed: %1$s</string>
+    <string name="toast_restore_success">Data Restored Successfully!</string>
+    <string name="toast_restore_fail">Restore Failed: Invalid Backup File</string>
+    <string name="toast_test_notif">Sending broadcast...</string>
+    <string name="toast_shift_logged">Shift Logged Successfully!</string>
+
+    <string name="notif_channel_name">Shift Reminders</string>
+    <string name="notif_channel_desc">Notifies you when your shift ends</string>
+    <string name="notif_title">Shift Completed!</string>
+    <string name="notif_auto_complete">Shift ended. It will auto-log when you next open the app.</string>
+    <string name="notif_manual">Your %1$s shift has ended. Log it now?</string>
+    <string name="notif_action_log">Log Shift</string>
+    <string name="language">Language</string>
+    <string name="lang_system">System Default</string>
+</resources>
