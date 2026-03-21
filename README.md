@@ -11,7 +11,8 @@ Pretty UI and monthly overview of hours, shifts and money earned.
 
 You can export all logs as a CSV and make backups and restore from them as you want.
 Right now only english and german translations!
-[Screenshot_2026-03-21-21-59-33-74_76b16a3eeba59b6ce9bb4f8c0e56b4c9](https://github.com/user-attachments/assets/e1137c33-07f8-4071-93b4-c71fe74d3f3e)
+
+![Screenshot_2026-03-21-21-59-33-74_76b16a3eeba59b6ce9bb4f8c0e56b4c9](https://github.com/user-attachments/assets/28c533b7-a6fd-4b33-92da-a4571c2248df)
 
 ![Screenshot_2026-03-21-21-59-36-77_76b16a3eeba59b6ce9bb4f8c0e56b4c9](https://github.com/user-attachments/assets/f9d6cb92-f2b9-453b-8b28-41cc46d31614)
 
