@@ -1,0 +1,14 @@
+# CleanShift
+A simple and modern way to log and view work shifts.
+
+## ATTENTION!: Made fully with AI 
+I used Gemini 3.1 Pro for this and didnt code a single line as i cant code at all. 
+I just couldnt find an app that did everything i needed thus i asked it to create this and it turned out great, but be advised no human hands involved in this.
+
+## What it does
+You can configure multiple shifts, each with different hours, pay, dates and if and how they should repeat (weekly, bi-weekly etc.)
+The app will send a notification after every shift and ask to log it or you can enable autolog so it doesnt ask and is immidiately logged. 
+Pretty UI and monthly overview of hours, shifts and money earned.
+
+You can export all logs as a CSV and make backups and restore from them as you want.
+Right now only english and german translations!
