@@ -1,5 +1,1 @@
-# CleanShift
 A simple and modern way to log and view work shifts.
-
-Configure shifts, by date, pay, hours and repitition rules and have an overview of Monthly stats.
-
