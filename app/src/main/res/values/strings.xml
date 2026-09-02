@@ -53,9 +53,19 @@
     <string name="repetition">Repetition</string>
     <string name="repeat_every_x">Repeat every X days</string>
     <string name="hourly_wage">Hourly Wage</string>
+    <string name="tab_hourly">Hourly</string>
+    <string name="tab_custom">Custom</string>
+    <string name="total_amount">Total Amount</string>
     <string name="btn_save">Save</string>
     <string name="btn_delete">Delete</string>
     <string name="btn_cancel">Cancel</string>
+    <string name="btn_reset">Reset to Standard</string>
+
+    <string name="menu_edit">Edit</string>
+    <string name="menu_complete">Complete</string>
+    <string name="menu_incomplete">Not Complete</string>
+    <string name="menu_select_shift">Select Shift</string>
+    <string name="menu_custom_shift">Custom Shift</string>
 
     <string name="rep_none">One-time</string>
     <string name="rep_weekly">Weekly</string>

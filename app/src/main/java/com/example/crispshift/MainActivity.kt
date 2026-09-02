@@ -105,9 +105,11 @@ enum class RepeatType(val labelRes: Int) {
 
 data class ShiftRule(
     val id: Int, val name: String, val startDate: LocalDate, val startTime: LocalTime,
-    val endTime: LocalTime, val repeatType: RepeatType, val customDays: Int = 0, val hourlyWage: Double, val colorHue: Float? = null
+    val endTime: LocalTime, val repeatType: RepeatType, val customDays: Int = 0, val hourlyWage: Double,
+    val colorHue: Float? = null, val isFixedAmount: Boolean = false, val fixedAmount: Double = 0.0
 ) {
     val calculatedHours: Double get() {
+        if (isFixedAmount) return 0.0
         var minutes = Duration.between(startTime, endTime).toMinutes()
         if (minutes < 0) minutes += 1440
         return minutes / 60.0
@@ -122,11 +124,15 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         .registerTypeAdapter(LocalDate::class.java, JsonSerializer<LocalDate> { src, _, _ -> JsonPrimitive(src.toString()) })
         .registerTypeAdapter(LocalDate::class.java, JsonDeserializer { json, _, _ -> LocalDate.parse(json.asString) })
         .registerTypeAdapter(LocalTime::class.java, JsonSerializer<LocalTime> { src, _, _ -> JsonPrimitive(src.toString()) })
-        .registerTypeAdapter(LocalTime::class.java, JsonDeserializer { json, _, _ -> LocalTime.parse(json.asString) }).create()
+        .registerTypeAdapter(LocalTime::class.java, JsonDeserializer { json, _, _ -> LocalTime.parse(json.asString) })
+        .enableComplexMapKeySerialization()
+        .create()
 
     var currentMonth: YearMonth by mutableStateOf(YearMonth.now())
     var shiftRules: List<ShiftRule> by mutableStateOf(listOf())
     var loggedShifts: Map<LocalDate, LoggedShift> by mutableStateOf(mapOf())
+    var manualOverrides: Map<LocalDate, ShiftRule> by mutableStateOf(mapOf())
+    var skippedAutoCompletes: Set<LocalDate> by mutableStateOf(setOf())
     var themePref: String by mutableStateOf(prefs.getString("theme", "System") ?: "System")
     var useDynamicColor: Boolean by mutableStateOf(prefs.getBoolean("dynamic_color", true))
     var customHue: Float by mutableFloatStateOf(prefs.getFloat("custom_hue", 210f))
@@ -152,13 +158,28 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         return planned
     }
 
-    val plannedEarnings: Double get() = upcomingPlannedShifts.sumOf { it.calculatedHours * it.hourlyWage }
+    val plannedEarnings: Double get() = upcomingPlannedShifts.sumOf { if (it.isFixedAmount) it.fixedAmount else it.calculatedHours * it.hourlyWage }
     val plannedHours: Double get() = upcomingPlannedShifts.sumOf { it.calculatedHours }
     val plannedCount: Int get() = upcomingPlannedShifts.size
 
     fun formatMoney(amount: Double): String = if (currencyPref == "System") NumberFormat.getCurrencyInstance().format(amount) else "$currencyPref ${String.format(Locale.getDefault(), "%.2f", amount)}"
 
     fun getPlannedShiftForDate(date: LocalDate): ShiftRule? {
+        manualOverrides[date]?.let { return it }
+        return shiftRules.find { rule ->
+            if (date.isBefore(rule.startDate)) return@find false
+            val daysBetween = ChronoUnit.DAYS.between(rule.startDate, date)
+            when (rule.repeatType) {
+                RepeatType.NONE -> daysBetween == 0L
+                RepeatType.WEEKLY -> daysBetween % 7L == 0L
+                RepeatType.BIWEEKLY -> daysBetween % 14L == 0L
+                RepeatType.MONTHLY -> date.dayOfMonth == rule.startDate.dayOfMonth
+                RepeatType.CUSTOM -> rule.customDays > 0 && daysBetween % rule.customDays == 0L
+            }
+        }
+    }
+
+    fun getTemplateShiftForDate(date: LocalDate): ShiftRule? {
         return shiftRules.find { rule ->
             if (date.isBefore(rule.startDate)) return@find false
             val daysBetween = ChronoUnit.DAYS.between(rule.startDate, date)
@@ -175,8 +196,38 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleShiftForDate(date: LocalDate) {
         val planned = getPlannedShiftForDate(date)
         val currentLogs = loggedShifts.toMutableMap()
-        if (currentLogs.containsKey(date)) currentLogs.remove(date) else if (planned != null) currentLogs[date] = LoggedShift(date, planned.name, planned.calculatedHours * planned.hourlyWage, planned.calculatedHours)
+        if (currentLogs.containsKey(date)) currentLogs.remove(date) else if (planned != null) {
+            val earned = if (planned.isFixedAmount) planned.fixedAmount else planned.calculatedHours * planned.hourlyWage
+            currentLogs[date] = LoggedShift(date, planned.name, earned, planned.calculatedHours)
+        }
         loggedShifts = currentLogs; saveData(); scheduleNextAlarms(getApplication<Application>().applicationContext)
+    }
+
+    fun setOverride(date: LocalDate, rule: ShiftRule) {
+        manualOverrides = manualOverrides + (date to rule)
+        if (loggedShifts.containsKey(date)) {
+            val currentLogs = loggedShifts.toMutableMap()
+            val earned = if (rule.isFixedAmount) rule.fixedAmount else rule.calculatedHours * rule.hourlyWage
+            currentLogs[date] = LoggedShift(date, rule.name, earned, rule.calculatedHours)
+            loggedShifts = currentLogs
+        }
+        saveData(); scheduleNextAlarms(getApplication<Application>().applicationContext)
+    }
+
+    fun removeOverride(date: LocalDate) {
+        manualOverrides = manualOverrides - date
+        if (loggedShifts.containsKey(date)) {
+            val currentLogs = loggedShifts.toMutableMap()
+            val planned = getPlannedShiftForDate(date)
+            if (planned != null) {
+                val earned = if (planned.isFixedAmount) planned.fixedAmount else planned.calculatedHours * planned.hourlyWage
+                currentLogs[date] = LoggedShift(date, planned.name, earned, planned.calculatedHours)
+            } else {
+                currentLogs.remove(date)
+            }
+            loggedShifts = currentLogs
+        }
+        saveData(); scheduleNextAlarms(getApplication<Application>().applicationContext)
     }
 
     fun addShiftRule(rule: ShiftRule) { shiftRules = shiftRules + rule.copy(id = (shiftRules.maxOfOrNull { it.id } ?: 0) + 1); saveData(); scheduleNextAlarms(getApplication<Application>().applicationContext) }
@@ -200,10 +251,11 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         val currentLogs = loggedShifts.toMutableMap(); val today = LocalDate.now(); val now = LocalTime.now()
         for (i in 0..30) {
             val date = today.minusDays(i.toLong())
-            if (!currentLogs.containsKey(date)) {
+            if (!currentLogs.containsKey(date) && !skippedAutoCompletes.contains(date)) {
                 val rule = getPlannedShiftForDate(date)
                 if (rule != null && (date.isBefore(today) || (date == today && now.isAfter(rule.endTime)))) {
-                    currentLogs[date] = LoggedShift(date, rule.name, rule.calculatedHours * rule.hourlyWage, rule.calculatedHours)
+                    val earned = if (rule.isFixedAmount) rule.fixedAmount else rule.calculatedHours * rule.hourlyWage
+                    currentLogs[date] = LoggedShift(date, rule.name, earned, rule.calculatedHours)
                     changed = true
                 }
             }
@@ -249,7 +301,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
 
     fun createBackup(context: Context, uri: Uri) {
         try {
-            context.contentResolver.openOutputStream(uri)?.use { os -> OutputStreamWriter(os).use { writer -> writer.write(gson.toJson(mapOf("rules" to shiftRules, "logs" to loggedShifts.values.toList()))) } }
+            context.contentResolver.openOutputStream(uri)?.use { os -> OutputStreamWriter(os).use { writer -> writer.write(gson.toJson(mapOf("rules" to shiftRules, "logs" to loggedShifts.values.toList(), "overrides" to manualOverrides))) } }
             Toast.makeText(context, context.getString(R.string.toast_backup_success), Toast.LENGTH_SHORT).show()
         } catch (e: Exception) { Toast.makeText(context, context.getString(R.string.toast_backup_fail, e.message), Toast.LENGTH_LONG).show() }
     }
@@ -261,22 +313,37 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
                 shiftRules = gson.fromJson(jsonObject.get("rules").toString(), object : TypeToken<List<ShiftRule>>() {}.type) ?: emptyList()
                 val loadedLogs: List<LoggedShift> = gson.fromJson(jsonObject.get("logs").toString(), object : TypeToken<List<LoggedShift>>() {}.type) ?: emptyList()
                 loggedShifts = loadedLogs.associateBy { it.date }
+                val oJson = jsonObject.get("overrides")
+                if (oJson != null) {
+                    val oType = object : TypeToken<Map<LocalDate, ShiftRule>>() {}.type
+                    manualOverrides = gson.fromJson(oJson.toString(), oType) ?: emptyMap()
+                }
                 saveData(); scheduleNextAlarms(context)
                 Toast.makeText(context, context.getString(R.string.toast_restore_success), Toast.LENGTH_SHORT).show()
             }
         } catch (_: Exception) { Toast.makeText(context, context.getString(R.string.toast_restore_fail), Toast.LENGTH_LONG).show() }
     }
 
-    private fun saveData() { prefs.edit { putString("rules", gson.toJson(shiftRules)); putString("logs", gson.toJson(loggedShifts.values.toList())) } }
+    fun skipAutoComplete(date: LocalDate) { skippedAutoCompletes = skippedAutoCompletes + date; saveData() }
+
+    private fun saveData() { prefs.edit { putString("rules", gson.toJson(shiftRules)); putString("logs", gson.toJson(loggedShifts.values.toList())); putString("overrides", gson.toJson(manualOverrides)); putString("skipped", gson.toJson(skippedAutoCompletes.toList())) } }
     private fun loadData() {
         try {
-            val rJson = prefs.getString("rules", null); val lJson = prefs.getString("logs", null)
+            val rJson = prefs.getString("rules", null); val lJson = prefs.getString("logs", null); val oJson = prefs.getString("overrides", null); val sJson = prefs.getString("skipped", null)
             if (rJson != null) shiftRules = gson.fromJson(rJson, object : TypeToken<List<ShiftRule>>() {}.type) ?: emptyList()
             if (lJson != null) {
                 val loadedLogs: List<LoggedShift> = gson.fromJson(lJson, object : TypeToken<List<LoggedShift>>() {}.type) ?: emptyList()
                 loggedShifts = loadedLogs.associateBy { it.date }
             }
-        } catch (_: Exception) { prefs.edit().clear().apply(); shiftRules = emptyList(); loggedShifts = emptyMap() }
+            if (oJson != null) {
+                val oType = object : TypeToken<Map<LocalDate, ShiftRule>>() {}.type
+                manualOverrides = gson.fromJson(oJson, oType) ?: emptyMap()
+            }
+            if (sJson != null) {
+                val sList: List<LocalDate> = gson.fromJson(sJson, object : TypeToken<List<LocalDate>>() {}.type) ?: emptyList()
+                skippedAutoCompletes = sList.toSet()
+            }
+        } catch (_: Exception) { prefs.edit().clear().apply(); shiftRules = emptyList(); loggedShifts = emptyMap(); manualOverrides = emptyMap(); skippedAutoCompletes = emptySet() }
     }
 }
 
@@ -287,12 +354,21 @@ class ShiftNotificationReceiver : BroadcastReceiver() {
         val dateStr = intent.getStringExtra("SHIFT_DATE") ?: return
         val shiftName = intent.getStringExtra("SHIFT_NAME") ?: "Your Shift"
         val autoComplete = intent.getBooleanExtra("AUTO_COMPLETE", false)
-        val openPending = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK }, PendingIntent.FLAG_IMMUTABLE)
-        val confirmPending = PendingIntent.getActivity(context, abs(dateStr.hashCode()), Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK; putExtra("CONFIRM_SHIFT_DATE", dateStr) }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+        val confirmPending = PendingIntent.getActivity(context, abs(dateStr.hashCode()) + 1, Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK; putExtra("CONFIRM_SHIFT_DATE", dateStr) }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val skipPending = PendingIntent.getActivity(context, abs(dateStr.hashCode()) + 2, Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK; putExtra("SKIP_SHIFT_DATE", dateStr) }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val editPending = PendingIntent.getActivity(context, abs(dateStr.hashCode()) + 3, Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK; putExtra("EDIT_SHIFT_DATE", dateStr) }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val notificationText = if (autoComplete) context.getString(R.string.notif_auto_complete) else context.getString(R.string.notif_manual, shiftName)
-        val notificationBuilder = NotificationCompat.Builder(context, "shift_alerts").setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(context.getString(R.string.notif_title)).setContentText(notificationText).setPriority(NotificationCompat.PRIORITY_MAX).setContentIntent(openPending).setAutoCancel(true)
-        if (!autoComplete) notificationBuilder.addAction(android.R.drawable.ic_input_add, context.getString(R.string.notif_action_log), confirmPending)
+        val notificationBuilder = NotificationCompat.Builder(context, "shift_alerts")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(context.getString(R.string.notif_title))
+            .setContentText(notificationText)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setAutoCancel(true)
+            .addAction(android.R.drawable.ic_input_add, context.getString(R.string.menu_complete), confirmPending)
+            .addAction(android.R.drawable.ic_delete, context.getString(R.string.menu_incomplete), skipPending)
+            .addAction(android.R.drawable.ic_menu_edit, context.getString(R.string.menu_edit), editPending)
 
         val manager: NotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(abs(dateStr.hashCode()), notificationBuilder.build())
@@ -300,6 +376,10 @@ class ShiftNotificationReceiver : BroadcastReceiver() {
 }
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        var pendingEditDate: LocalDate? by mutableStateOf(null)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -328,6 +408,17 @@ class MainActivity : ComponentActivity() {
                         viewModel.toggleShiftForDate(date)
                         Toast.makeText(context, context.getString(R.string.toast_shift_logged), Toast.LENGTH_SHORT).show()
                     }
+                    val notifManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    notifManager.cancel(abs(it.hashCode()))
+                }
+                currentIntent.getStringExtra("SKIP_SHIFT_DATE")?.let {
+                    val date = LocalDate.parse(it)
+                    viewModel.skipAutoComplete(date)
+                    val notifManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    notifManager.cancel(abs(it.hashCode()))
+                }
+                currentIntent.getStringExtra("EDIT_SHIFT_DATE")?.let {
+                    pendingEditDate = LocalDate.parse(it)
                     val notifManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                     notifManager.cancel(abs(it.hashCode()))
                 }
@@ -485,8 +576,7 @@ fun DashboardScreen(viewModel: ShiftViewModel) {
         }
     }
 
-    if (showDog) DogEasterEgg(onDismiss = { showDog = false })
-    if (showDialog) ShiftRuleDialog(initialRule = ruleToEdit, viewModelCustomHue = viewModel.customHue, onDismiss = { showDialog = false }, onSave = { r -> if (ruleToEdit == null) viewModel.addShiftRule(r) else viewModel.updateShiftRule(r); showDialog = false }, onDelete = { r -> viewModel.deleteShiftRule(r); showDialog = false })
+    if (showDialog) ShiftRuleDialog(initialRule = ruleToEdit, viewModelCustomHue = viewModel.customHue, onDismiss = { showDialog = false }, onSave = { r -> if (ruleToEdit == null) viewModel.addShiftRule(r) else viewModel.updateShiftRule(r); showDialog = false }, onDelete = { r -> viewModel.deleteShiftRule(r); showDialog = false }, isOverride = false)
 }
 
 @Composable
@@ -580,6 +670,70 @@ fun CalendarSection(viewModel: ShiftViewModel) {
     val days = viewModel.currentMonth.lengthOfMonth()
     val today = LocalDate.now(); val view = LocalView.current
     var off by remember { mutableFloatStateOf(0f) }
+
+    var selectedDate by remember { mutableStateOf<LocalDate?>(MainActivity.pendingEditDate) }
+    var showMenu by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(MainActivity.pendingEditDate != null) }
+    var showSelectDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(MainActivity.pendingEditDate) {
+        if (MainActivity.pendingEditDate != null) {
+            selectedDate = MainActivity.pendingEditDate
+            showEditDialog = true
+            MainActivity.pendingEditDate = null
+        }
+    }
+
+    if (showEditDialog && selectedDate != null) {
+        val date = selectedDate!!
+        val existing = viewModel.manualOverrides[date]
+        val template = viewModel.getTemplateShiftForDate(date)
+        ShiftRuleDialog(
+            initialRule = existing ?: template?.copy(startDate = date, repeatType = RepeatType.NONE) ?: ShiftRule(0, "", date, LocalTime.of(9, 0), LocalTime.of(17, 0), RepeatType.NONE, 0, 15.0),
+            viewModelCustomHue = viewModel.customHue,
+            onDismiss = { showEditDialog = false },
+            onSave = { rule ->
+                viewModel.setOverride(date, rule)
+                showEditDialog = false
+            },
+            onDelete = {
+                viewModel.removeOverride(date)
+                showEditDialog = false
+            },
+            onReset = if (template != null && viewModel.manualOverrides.containsKey(date)) {
+                {
+                    viewModel.removeOverride(date)
+                    showEditDialog = false
+                }
+            } else null,
+            isOverride = true
+        )
+    }
+
+    if (showSelectDialog && selectedDate != null) {
+        val date = selectedDate!!
+        AlertDialog(
+            onDismissRequest = { showSelectDialog = false },
+            title = { Text(stringResource(R.string.menu_select_shift)) },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showSelectDialog = false }) { Text(stringResource(R.string.btn_cancel)) } },
+            text = {
+                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                    items(viewModel.shiftRules.size) { index ->
+                        val rule = viewModel.shiftRules[index]
+                        DropdownMenuItem(
+                            text = { Text(rule.name) },
+                            onClick = {
+                                viewModel.setOverride(date, rule.copy(startDate = date, repeatType = RepeatType.NONE))
+                                showSelectDialog = false
+                            }
+                        )
+                    }
+                }
+            }
+        )
+    }
+
     Column(modifier = Modifier.fillMaxWidth().pointerInput(Unit) { detectHorizontalDragGestures(onDragEnd = { if (off > 150) { view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK); viewModel.previousMonth() } else if (off < -150) { view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK); viewModel.nextMonth() }; off = 0f }, onHorizontalDrag = { change, d -> change.consume(); off += d }) }) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK); viewModel.previousMonth() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null) }
@@ -590,7 +744,36 @@ fun CalendarSection(viewModel: ShiftViewModel) {
             items(start) { Spacer(Modifier.fillMaxSize()) }
             items(days) { i ->
                 val d = viewModel.currentMonth.atDay(i + 1); val p = viewModel.getPlannedShiftForDate(d); val l = viewModel.loggedShifts.containsKey(d)
-                CalendarDayCell(d, p, viewModel.customHue, l, d == today) { view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); viewModel.toggleShiftForDate(d) }
+                Box {
+                    CalendarDayCell(d, p, viewModel.customHue, l, d == today) {
+                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        selectedDate = d
+                        showMenu = true
+                    }
+                    if (showMenu && selectedDate == d) {
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            if (p != null || l) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.menu_edit)) },
+                                    onClick = { showMenu = false; showEditDialog = true }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (l) stringResource(R.string.menu_incomplete) else stringResource(R.string.menu_complete)) },
+                                    onClick = { showMenu = false; viewModel.toggleShiftForDate(d) }
+                                )
+                            } else {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.menu_select_shift)) },
+                                    onClick = { showMenu = false; showSelectDialog = true }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.menu_custom_shift)) },
+                                    onClick = { showMenu = false; showEditDialog = true }
+                                )
+                            }
+                        }
+                    }
+                }
             }
             items(42 - (start + days)) { Spacer(Modifier.fillMaxSize()) }
         }
@@ -600,7 +783,7 @@ fun CalendarSection(viewModel: ShiftViewModel) {
 @Composable
 fun CalendarDayCell(d: LocalDate, p: ShiftRule?, h: Float, l: Boolean, isT: Boolean, onClick: () -> Unit) {
     val dot = if (p != null) Color.hsv(p.colorHue ?: h, 0.7f, 0.9f) else MaterialTheme.colorScheme.primary
-    Column(modifier = Modifier.aspectRatio(1f).padding(2.dp).clip(CircleShape).clickable(enabled = p != null || l) { onClick() }.then(if (isT) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+    Column(modifier = Modifier.aspectRatio(1f).padding(2.dp).clip(CircleShape).clickable { onClick() }.then(if (isT) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Text(d.dayOfMonth.toString(), fontSize = 12.sp, color = if (p != null || l) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(0.4f))
         if (p != null || l) Box(Modifier.size(4.dp).clip(CircleShape).background(if (l) dot else dot.copy(0.3f)))
     }
@@ -628,24 +811,50 @@ fun LogScreen(viewModel: ShiftViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ShiftRuleDialog(initialRule: ShiftRule?, viewModelCustomHue: Float, onDismiss: () -> Unit, onSave: (ShiftRule) -> Unit, onDelete: (ShiftRule) -> Unit) {
+fun ShiftRuleDialog(initialRule: ShiftRule?, viewModelCustomHue: Float, onDismiss: () -> Unit, onSave: (ShiftRule) -> Unit, onDelete: (ShiftRule) -> Unit, onReset: (() -> Unit)? = null, isOverride: Boolean = false) {
     val ctx = LocalContext.current; var name by remember { mutableStateOf(initialRule?.name ?: "") }; var startD by remember { mutableStateOf(initialRule?.startDate ?: LocalDate.now()) }
     var startT by remember { mutableStateOf(initialRule?.startTime ?: LocalTime.of(9, 0)) }; var endT by remember { mutableStateOf(initialRule?.endTime ?: LocalTime.of(17, 0)) }
-    var rep by remember { mutableStateOf(initialRule?.repeatType ?: RepeatType.WEEKLY) }; var wage by remember { mutableStateOf(initialRule?.hourlyWage?.let { String.format(Locale.getDefault(), "%.2f", it) } ?: "15.00") }
+    var rep by remember { mutableStateOf(initialRule?.repeatType ?: RepeatType.NONE) }; var wage by remember { mutableStateOf(initialRule?.hourlyWage?.let { String.format(Locale.getDefault(), "%.2f", it) } ?: "15.00") }
     var hue by remember { mutableFloatStateOf(initialRule?.colorHue ?: viewModelCustomHue) }; var exp by remember { mutableStateOf(false) }
+    var isFixed by remember { mutableStateOf(initialRule?.isFixedAmount ?: false) }
+    var fixedAmt by remember { mutableStateOf(initialRule?.fixedAmount?.let { String.format(Locale.getDefault(), "%.2f", it) } ?: "50.00") }
+    var selectedTab by remember { mutableIntStateOf(if (isFixed) 1 else 0) }
+
     val hrs = remember(startT, endT) { var m = Duration.between(startT, endT).toMinutes(); if (m < 0) m += 1440; m / 60.0 }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (initialRule == null) stringResource(R.string.add_shift) else stringResource(R.string.edit_shift)) }, confirmButton = { TextButton(onClick = { onSave(ShiftRule(initialRule?.id ?: 0, name, startD, startT, endT, rep, 1, wage.replace(",", ".").toDoubleOrNull() ?: 0.0, hue)) }) { Text(stringResource(R.string.btn_save)) } }, dismissButton = { Row { if (initialRule != null) TextButton(onClick = { onDelete(initialRule) }) { Text(stringResource(R.string.btn_delete), color = MaterialTheme.colorScheme.error) }; TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } } },
+    AlertDialog(onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(if (initialRule == null) stringResource(R.string.add_shift) else stringResource(R.string.edit_shift))
+                TabRow(selectedTabIndex = selectedTab, modifier = Modifier.padding(top = 8.dp), containerColor = Color.Transparent, divider = {}) {
+                    Tab(selected = selectedTab == 0, onClick = { selectedTab = 0; isFixed = false }, text = { Text(stringResource(R.string.tab_hourly), fontSize = 12.sp) })
+                    Tab(selected = selectedTab == 1, onClick = { selectedTab = 1; isFixed = true }, text = { Text(stringResource(R.string.tab_custom), fontSize = 12.sp) })
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(ShiftRule(initialRule?.id ?: 0, name, startD, startT, endT, rep, 1, wage.replace(",", ".").toDoubleOrNull() ?: 0.0, hue, isFixed, fixedAmt.replace(",", ".").toDoubleOrNull() ?: 0.0)) }) { Text(stringResource(R.string.btn_save)) } },
+        dismissButton = { Column { Row { if (initialRule != null) TextButton(onClick = { onDelete(initialRule) }) { Text(stringResource(R.string.btn_delete), color = MaterialTheme.colorScheme.error) }; TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } }; if (onReset != null) TextButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.btn_reset)) } } },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(name, { name = it }, label = { Text(stringResource(R.string.shift_name)) }, modifier = Modifier.fillMaxWidth())
             Text(stringResource(R.string.shift_color_marker), fontSize = 12.sp, fontWeight = FontWeight.Bold); Box(contentAlignment = Alignment.Center) { Box(Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(Brush.horizontalGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)))); Slider(hue, { hue = it }, valueRange = 0f..360f, colors = SliderDefaults.colors(thumbColor = Color.hsv(hue, 1f, 1f), activeTrackColor = Color.Transparent, inactiveTrackColor = Color.Transparent)) }
-            OutlinedTextField(startD.toString(), {}, readOnly = true, label = { Text(stringResource(R.string.start_date)) }, modifier = Modifier.fillMaxWidth().clickable { DatePickerDialog(ctx, { _, y, m, d -> startD = LocalDate.of(y, m + 1, d) }, startD.year, startD.monthValue - 1, startD.dayOfMonth).show() }, enabled = false, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(startT.toString(), {}, readOnly = true, modifier = Modifier.weight(1f).clickable { TimePickerDialog(ctx, { _, h, m -> startT = LocalTime.of(h, m) }, startT.hour, startT.minute, true).show() }, enabled = false, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline))
-                OutlinedTextField(endT.toString(), {}, readOnly = true, modifier = Modifier.weight(1f).clickable { TimePickerDialog(ctx, { _, h, m -> endT = LocalTime.of(h, m) }, endT.hour, endT.minute, true).show() }, enabled = false, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline))
+
+            if (!isOverride) {
+                OutlinedTextField(startD.toString(), {}, readOnly = true, label = { Text(stringResource(R.string.start_date)) }, modifier = Modifier.fillMaxWidth().clickable { DatePickerDialog(ctx, { _, y, m, d -> startD = LocalDate.of(y, m + 1, d) }, startD.year, startD.monthValue - 1, startD.dayOfMonth).show() }, enabled = false, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline))
             }
-            Text(stringResource(R.string.duration_format, String.format(Locale.getDefault(), "%.1f", hrs)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-            ExposedDropdownMenuBox(exp, { exp = !exp }) { OutlinedTextField(stringResource(rep.labelRes), {}, readOnly = true, label = { Text(stringResource(R.string.repetition)) }, modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, true)); ExposedDropdownMenu(exp, { exp = false }) { RepeatType.entries.forEach { t -> DropdownMenuItem({ Text(stringResource(t.labelRes)) }, { rep = t; exp = false }) } } }
-            OutlinedTextField(wage, { wage = it }, label = { Text(stringResource(R.string.hourly_wage)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+
+            if (!isFixed) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(startT.toString(), {}, readOnly = true, modifier = Modifier.weight(1f).clickable { TimePickerDialog(ctx, { _, h, m -> startT = LocalTime.of(h, m) }, startT.hour, startT.minute, true).show() }, enabled = false, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline))
+                    OutlinedTextField(endT.toString(), {}, readOnly = true, modifier = Modifier.weight(1f).clickable { TimePickerDialog(ctx, { _, h, m -> endT = LocalTime.of(h, m) }, endT.hour, endT.minute, true).show() }, enabled = false, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline))
+                }
+                Text(stringResource(R.string.duration_format, String.format(Locale.getDefault(), "%.1f", hrs)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                OutlinedTextField(wage, { wage = it }, label = { Text(stringResource(R.string.hourly_wage)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+            } else {
+                OutlinedTextField(fixedAmt, { fixedAmt = it }, label = { Text(stringResource(R.string.total_amount)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+            }
+
+            if (!isOverride && !isFixed) {
+                ExposedDropdownMenuBox(exp, { exp = !exp }) { OutlinedTextField(stringResource(rep.labelRes), {}, readOnly = true, label = { Text(stringResource(R.string.repetition)) }, modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, true)); ExposedDropdownMenu(exp, { exp = false }) { RepeatType.entries.forEach { t -> DropdownMenuItem({ Text(stringResource(t.labelRes)) }, { rep = t; exp = false }) } } }
+            }
         } }
     )
 }
